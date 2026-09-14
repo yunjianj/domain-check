@@ -86,32 +86,18 @@
 
 ### 设置仓库 action
 
-点开仓库 `Settings` → `Secrets and variables` → 在左侧选 **`Actions`**（**不要**选 `Environments`），只需 3 项凭据：
+点开仓库 `Settings` → `Secrets and variables` → **`Actions`** → `Repository secrets` → `New repository secret`，
+依次添加以下 3 项：
 
-| 名称 | 填在哪个选项卡 | 说明 |
-|------|----------------|------|
-| `CF_API_TOKEN` | `Secrets` | 必须，需要 Worker 和 KV 权限 |
-| `CF_KV_ID` | `Secrets` | 必须，创建 KV 得到的 ID 值 |
-| `CF_ACCOUNT_ID` | `Secrets`（也可放 `Variables`） | 必须，CF 的账户 ID，**是 ID 不是邮箱账号** |
+| 名称 | 说明 |
+|------|----------|
+| `CF_API_TOKEN` | 必须，需要 Worker 和 KV 权限 |
+| `CF_KV_ID` | 必须，创建 KV 得到的 ID 值 |
+| `CF_ACCOUNT_ID` | 必须，CF 的账户 ID，**是 ID 不是邮箱账号** |
 
 > [!IMPORTANT]
-> **必须用 `Repository secrets`，不要用 `Environment secrets`。**
-> 本项目的 workflow 没有声明 `environment:`，填在 Environment secrets 里的值它读不到，
-> 会直接报「必须设置 CF_API_TOKEN」而失败。两者的区别见下表。
-
-GitHub 的密钥分两个层级，作用域不同：
-
-| 层级 | 配置位置 | 谁能读到 |
-|------|----------|----------|
-| **Repository secrets** ✅ 本项目用这个 | `Settings` → `Secrets and variables` → `Actions` | 仓库内**所有** workflow 都能读到 |
-| Environment secrets ❌ 本项目读不到 | `Settings` → `Environments` → 环境名 → `Environment secrets` | **只有** job 里声明了 `environment: <环境名>` 才能读到 |
-
-也就是说：若确实想用 Environment secrets（例如想给生产环境加人工审批），除了在环境里填值，
-还必须给 workflow 的 job 加上 `environment: <环境名>` 才能生效；没加这一行，就是「填了也读不到」。
-
-关于 `Secrets` 与 `Variables`：`Secrets` 加密存储、**写入后无法再回读明文**，`Variables` 明文可见。
-三项凭据两种都能读取（workflow 里写作 `secrets.X || vars.X`，优先读 `Secrets`），
-所以按上表填一边即可，**不要两处填不同的值**。
+> 请填在 `Secrets and variables` → `Actions` → `Repository secrets` 下，
+> **不要**填到 `Environments` 里：本项目的 workflow 没有声明 `environment:`，填在那里读不到。
 
 > [!NOTE]
 > **`PASSWORD`、`TGID`、`TGTOKEN`、`CF_CRONS` 都不要放在这里**，它们改在 Cloudflare 控制台维护（见下一节）。
