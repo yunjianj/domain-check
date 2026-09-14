@@ -16,11 +16,11 @@ jobs:
 
     steps:
       - name: 检出本仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 同步上游仓库
         id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.3
         with:
           upstream_sync_repo: yutian81/domain-check
           upstream_sync_branch: main

@@ -26,15 +26,14 @@ jobs:
 
     steps:
       - name: ⬇️ 检出仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
+      # node-version 不能低于 22：wrangler-action 默认安装 wrangler v4 latest，
+      # 而 wrangler >= 4.100 的 engines 要求 node >= 22（与 devDependencies 的 ^4.103.0 一致）。
       - name: 🛠️ 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
-
-      - name: 🆙 更新并安装最新 Wrangler
-        run: npm install -g wrangler@latest
+          node-version: '22'
 
       - name: 🔄 替换 wrangler.toml 中的变量
         id: config_setup
@@ -57,7 +56,7 @@ jobs:
           echo "worker_name=$WORKER_NAME" >> $GITHUB_OUTPUT
 
       - name: 🚀 部署到 CF Worker
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ env.CF_API_TOKEN }}
           accountId: ${{ env.CF_ACCOUNT_ID }}
