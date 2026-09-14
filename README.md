@@ -2,10 +2,6 @@
 
 基于 Cloudflare Worker 和 Worker KV 构建的域名到期监控仪表盘，支持自动 WHOIS 查询（含 RDAP 回退）、分组管理、到期提醒等功能。
 
-- 界面预览
-
-<img width="1894" height="879" alt="image" src="https://b2qq.24811213.xyz/2025-11/1763455544-image.webp" />
-
 ## 功能特性
 
 - ✅ **双模式访问**：`/` 公开页面（只读、域名脱敏）和 `/admin` 管理页面（需密码、完整操作）
@@ -20,15 +16,6 @@
 - 📱 **Telegram 通知**：定时检查并推送即将到期提醒；管理页可一键发送测试消息，立即验证通知配置是否生效
 - 🎨 **响应式设计**：支持移动端和桌面端访问
 - 🖼️ **精美模态框**：替换浏览器原生 alert/confirm，毛玻璃效果
-
-## 🆕 更新日志
-
-### 2025-07-04
-- ✨ **新增续期功能**：域名卡片新增「续期」按钮，支持年/月续费，自动更新到期时间并记录续费周期
-- 💎 **全面毛玻璃化**：所有模态框（编辑弹窗、续费弹窗、消息弹窗）统一半透明毛玻璃效果，降低透明度
-- 🏷️ **分组标签系统**：域名卡片分组显示为彩色标签；编辑弹窗分组改为标签选择器（下拉选择+自定义输入+空格添加+标签删除）
-- 🔽 **智能下拉选择**：注册商名称、注册商地址、注册账号 增加基于已有数据的自动补全下拉选择器
-- 🔧 其他 UI 细节优化：卡片间距、标签间距、续费弹窗布局等
 
 ## 路由架构
 
@@ -88,7 +75,7 @@
 | KV 绑定（`DOMAIN_KV`） | `wrangler.toml`，ID 在部署时注入 | 每次按文件重建，不会丢 |
 | Cron 定时触发器 | **Cloudflare 控制台** | **不会**：文件里刻意不写 `[triggers]`，按 Cloudflare 规则，`triggers` 未声明时部署不触碰已有触发器 |
 | 环境变量（`PASSWORD`、`TGID`、`TGTOKEN`、站点信息…） | **Cloudflare 控制台** | **不会**：文件里设了 `keep_vars = true`；加密类型的变量 Wrangler 从不删除 |
-| 部署凭据 | GitHub 仓库 `Secrets and variables` | — |
+| 部署凭据 | GitHub 仓库 **Repository secrets**（`Settings → Secrets and variables → Actions`） | — |
 
 这样 GitHub Action 里**只需要 3 项部署凭据**，业务配置全部留在 Cloudflare 后台，改配置不需要改代码、也不需要重新部署。
 
@@ -99,21 +86,40 @@
 
 ### 设置仓库 action
 
-点开仓库 `settings` → `Secrets and variables` → `Actions`，只需 3 项凭据（放在 `secrets` 或 `variables` 里都能识别，优先读 `secrets`）：
+点开仓库 `Settings` → `Secrets and variables` → 在左侧选 **`Actions`**（**不要**选 `Environments`），只需 3 项凭据：
 
-| 名称 | 建议位置 | 说明 |
-|------|----------|------|
-| `CF_API_TOKEN` | `secrets` | 必须，需要 worker 和 kv 权限 |
-| `CF_KV_ID` | `secrets` | 必须，创建 KV 得到的 ID 值 |
-| `CF_ACCOUNT_ID` | `variables` | 必须，CF 的账户 ID，**是 ID 不是邮箱账号** |
+| 名称 | 填在哪个选项卡 | 说明 |
+|------|----------------|------|
+| `CF_API_TOKEN` | `Secrets` | 必须，需要 Worker 和 KV 权限 |
+| `CF_KV_ID` | `Secrets` | 必须，创建 KV 得到的 ID 值 |
+| `CF_ACCOUNT_ID` | `Secrets`（也可放 `Variables`） | 必须，CF 的账户 ID，**是 ID 不是邮箱账号** |
 
 > [!IMPORTANT]
+> **必须用 `Repository secrets`，不要用 `Environment secrets`。**
+> 本项目的 workflow 没有声明 `environment:`，填在 Environment secrets 里的值它读不到，
+> 会直接报「必须设置 CF_API_TOKEN」而失败。两者的区别见下表。
+
+GitHub 的密钥分两个层级，作用域不同：
+
+| 层级 | 配置位置 | 谁能读到 |
+|------|----------|----------|
+| **Repository secrets** ✅ 本项目用这个 | `Settings` → `Secrets and variables` → `Actions` | 仓库内**所有** workflow 都能读到 |
+| Environment secrets ❌ 本项目读不到 | `Settings` → `Environments` → 环境名 → `Environment secrets` | **只有** job 里声明了 `environment: <环境名>` 才能读到 |
+
+也就是说：若确实想用 Environment secrets（例如想给生产环境加人工审批），除了在环境里填值，
+还必须给 workflow 的 job 加上 `environment: <环境名>` 才能生效；没加这一行，就是「填了也读不到」。
+
+关于 `Secrets` 与 `Variables`：`Secrets` 加密存储、**写入后无法再回读明文**，`Variables` 明文可见。
+三项凭据两种都能读取（workflow 里写作 `secrets.X || vars.X`，优先读 `Secrets`），
+所以按上表填一边即可，**不要两处填不同的值**。
+
+> [!NOTE]
 > **`PASSWORD`、`TGID`、`TGTOKEN`、`CF_CRONS` 都不要放在这里**，它们改在 Cloudflare 控制台维护（见下一节）。
 > 旧仓库里若还留着这几项，可以直接删掉，不影响部署。
 
 ### 运行 action
 
-- 点击仓库 `actions` → `all workerflows` → `自动部署到 CF worker`
+- 点击仓库 `Actions` → `All workflows` → `自动部署到 CF Worker`
 - 点击 `run workflow`
 - 等待 action 运行，查看运行日志，点击输出的 `worker 管理后台` 链接
 - 日志里还有一项 **「检查 Worker 变量是否就绪」**，它会在部署后列出 Worker 上现有的变量与绑定：
