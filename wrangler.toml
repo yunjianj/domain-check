@@ -1,11 +1,27 @@
 name = "domain-check"
 main = "src/index.js"
 compatibility_date = "2025-11-17"
+
+# 保留控制台里配置的变量。
+# 本文件不声明任何 [vars]，Worker 的环境变量（PASSWORD、TGID、TGTOKEN、SITENAME
+# 等）全部在控制台「设置 → 变量和机密」里维护。没有这一行，每次部署都会用本文件
+# 的空配置覆盖掉控制台里的变量；加上它才能让控制台的配置长期保留。
+# 另：加密类型的变量由 Cloudflare 单独存储，wrangler 任何时候都不会删除。
 keep_vars = true
 
+# KV 绑定保留在本文件声明，ID 由 GitHub Actions 部署时用 CF_KV_ID 注入，
+# 这样每次部署都会重建绑定，不会出现「重新部署后 KV 绑定丢失」的问题。
 [[kv_namespaces]]
-binding = "DOMAIN_KV" 
-id = "{CF_KV_ID}" # action部署时被变量替换
+binding = "DOMAIN_KV"
+id = "{CF_KV_ID}" # action 部署时被变量替换
 
-[triggers]
-crons = ["{CF_CRONS}"] # action部署时被变量替换，默认为北京时间 9:00 和 21:00
+# Cron Trigger 刻意不在本文件声明，改由控制台维护：
+#   Worker → 设置 → 触发器 → Cron 触发器 → 添加，例如 0 1,13 * * *
+#
+# 依据 Cloudflare 的规则：triggers / crons 为 undefined 时，部署会保留控制台里
+# 已有的触发器；一旦在此处写了 crons，每次部署就会用文件内容覆盖控制台配置。
+# 因此把触发器放在控制台，才能做到「改时间不用改代码、不用重新部署」。
+# （只有需要彻底清空全部触发器时，才在这里显式写 crons = []。）
+#
+# 程序侧的配套逻辑（从事件自带的 cron 字段学习计划、幂等执行、失败补跑）见
+# src/schedule.js。

@@ -76,11 +76,21 @@
 ## 部署平台：Cloudflare Workers
 
 > [!TIP]
-> 放弃在CF网页管理后台直接链接仓库部署的方式  
-> 此对于kv空间绑定和定时触发器的设置完全依赖于 wrangler.toml  
-> 如果 wrangler.toml 没有进行配置，则项目在重新部署后会丢失参数，导致kv空间绑定以及定时器丢失  
-> 这是CF worker 链接仓库部署一直以来的bug  
+> 不要用「CF 网页管理后台直接连接仓库」的方式部署：那种方式下 KV 绑定和定时触发器的设置完全依赖于 wrangler.toml，
+> 文件里没写的部分会在重新部署后丢失（这是 CF worker 链接仓库部署一直以来的 bug）。  
 > **因此，项目部署方式改为 github action，以确保相关参数配置持久化**  
+
+### 各配置项归谁管
+
+| 配置项 | 在哪里维护 | 重新部署时会不会被覆盖 |
+|--------|-----------|----------------------|
+| `name` / `main` / `compatibility_date` | `wrangler.toml` | — |
+| KV 绑定（`DOMAIN_KV`） | `wrangler.toml`，ID 在部署时注入 | 每次按文件重建，不会丢 |
+| Cron 定时触发器 | **Cloudflare 控制台** | **不会**：文件里刻意不写 `[triggers]`，按 Cloudflare 规则，`triggers` 未声明时部署不触碰已有触发器 |
+| 环境变量（`PASSWORD`、`TGID`、`TGTOKEN`、站点信息…） | **Cloudflare 控制台** | **不会**：文件里设了 `keep_vars = true`；加密类型的变量 Wrangler 从不删除 |
+| 部署凭据 | GitHub 仓库 `Secrets and variables` | — |
+
+这样 GitHub Action 里**只需要 3 项部署凭据**，业务配置全部留在 Cloudflare 后台，改配置不需要改代码、也不需要重新部署。
 
 ### 前置条件
 - 先给把本项目点个⭐，再 Fork，[点击直达](https://github.com/yutian81/domain-check/fork)
@@ -89,41 +99,57 @@
 
 ### 设置仓库 action
 
-- 点开仓库 `settings` → `Secrets and variables` → `Actions`
-- 设置如下 `secrets`:
-  - **CF_API_TOKEN**: 必须，需要 worker 和 kv 权限
-  - **CF_KV_ID**: 必须，创建KV得到的ID值
-  - **PASSWORD**: 必须，访问管理页的密码。项目不提供默认密码，请自行设置一个强密码
-  - **TGID**: 可选，tg机器人ID，用于发送tg通知
-  - **TGTOKEN**: 可选，tg机器人token，用于发送tg通知
-- 转到 `variables` 选项卡，设置以下变量:
-  - **CF_ACCOUNT_ID**: 必须，CF的账户ID，**是ID不是邮箱账号**
-  - **CF_CRONS**: 可选，用于定时检查域名到期情况以发送tg通知
+点开仓库 `settings` → `Secrets and variables` → `Actions`，只需 3 项凭据（放在 `secrets` 或 `variables` 里都能识别，优先读 `secrets`）：
+
+| 名称 | 建议位置 | 说明 |
+|------|----------|------|
+| `CF_API_TOKEN` | `secrets` | 必须，需要 worker 和 kv 权限 |
+| `CF_KV_ID` | `secrets` | 必须，创建 KV 得到的 ID 值 |
+| `CF_ACCOUNT_ID` | `variables` | 必须，CF 的账户 ID，**是 ID 不是邮箱账号** |
+
+> [!IMPORTANT]
+> **`PASSWORD`、`TGID`、`TGTOKEN`、`CF_CRONS` 都不要放在这里**，它们改在 Cloudflare 控制台维护（见下一节）。
+> 旧仓库里若还留着这几项，可以直接删掉，不影响部署。
 
 ### 运行 action
 
 - 点击仓库 `actions` → `all workerflows` → `自动部署到 CF worker`
 - 点击 `run workflow`
 - 等待 action 运行，查看运行日志，点击输出的 `worker 管理后台` 链接
+- 日志里还有一项 **「检查 Worker 变量是否就绪」**，它会在部署后列出 Worker 上现有的变量与绑定：
+  - 缺少必填的 `PASSWORD` → **这一步会失败**（部署已完成，但管理功能不可用，这正是 fail-closed 的设计），
+    日志会给出控制台配置入口，补上后重跑一次 workflow 即可
+  - `TGID`/`TGTOKEN`、Turnstile 两个密钥若只配了一个 → 提示「必须成对配置」
+  - 万一读取不到变量清单（例如令牌权限不足），只提示、不失败，避免误报
 
-### 设置 CF worker
+### 在 Cloudflare 控制台配置环境变量
 
-- 进入 CF worker管理后台，给项目绑定一个自定义域名
-- 在 worker 的环境变量中，还可设置以下变量（`PASSWORD` 必填，其余可选）
+- 进入 CF worker 管理后台，给项目绑定一个自定义域名
+- 打开 `设置` → `变量和机密`（旧版叫「变量」），在这里维护**全部**环境变量（`PASSWORD` 必填，其余可选）
 
-| 变量名 | 说明 | 默认值/示例值 | 必填 |
-|--------|------|--------|------|
-| `PASSWORD` | 管理页访问密码，**无默认值，必须自行设置** | 请设置一个强密码 | ✅ |
-| `SESSION_TTL` | 登录会话的空闲有效期（单位：小时），超时需重新登录 | `168`（即 7 天） | ❌ |
-| `TURNSTILE_SITE_KEY` | Turnstile 站点密钥（公开），启用登录人机验证 | Turnstile 控制台里的 Site Key | ❌ |
-| `TURNSTILE_SECRET_KEY` | Turnstile 私钥（机密），服务端校验令牌用 | Turnstile 控制台里的 Secret Key | ❌ |
-| `DAYS` | 到期提醒天数 | `30` | ❌ |
-| `SITENAME` | 网站名称 | `域名到期监控` | ❌ |
-| `ICON` | 网站图标 | `https://example.com/icon.png` | ❌ |
-| `BGIMG` | 背景图片 | `https://example.com/bg.png` | ❌ |
-| `GITHUB_URL` | GitHub 链接 | `https://github.com/yutian81/domain-check` | ❌ |
-| `BLOG_URL` | 博客链接 | `https://blog.notett.com` | ❌ |
-| `BLOG_NAME` | 博客名称 | `QingYun Blog` | ❌ |
+| 变量名 | 说明 | 建议类型 | 默认值/示例值 | 必填 |
+|--------|------|--------|--------|------|
+| `PASSWORD` | 管理页访问密码，**无默认值，必须自行设置** | 加密 | 请设置一个强密码 | ✅ |
+| `TGID` | Telegram 机器人 ID（或群/频道 ID） | 加密 | `123456789` | ❌ |
+| `TGTOKEN` | Telegram 机器人 token | 加密 | `123456:ABC-...` | ❌ |
+| `TURNSTILE_SECRET_KEY` | Turnstile 私钥（机密），服务端校验令牌用 | 加密 | Turnstile 控制台里的 Secret Key | ❌ |
+| `TURNSTILE_SITE_KEY` | Turnstile 站点密钥（公开），启用登录人机验证 | 文本 | Turnstile 控制台里的 Site Key | ❌ |
+| `SESSION_TTL` | 登录会话的空闲有效期（单位：小时），超时需重新登录 | 文本 | `168`（即 7 天） | ❌ |
+| `DAYS` | 到期提醒天数 | 文本 | `30` | ❌ |
+| `SITENAME` | 网站名称 | 文本 | `域名到期监控` | ❌ |
+| `ICON` | 网站图标 | 文本 | `https://example.com/icon.png` | ❌ |
+| `BGIMG` | 背景图片 | 文本 | `https://example.com/bg.png` | ❌ |
+| `GITHUB_URL` | GitHub 链接 | 文本 | `https://github.com/yutian81/domain-check` | ❌ |
+| `BLOG_URL` | 博客链接 | 文本 | `https://blog.notett.com` | ❌ |
+| `BLOG_NAME` | 博客名称 | 文本 | `QingYun Blog` | ❌ |
+
+> [!NOTE]
+> **控制台里的变量不会因为后续部署而丢失**，两条保障各管一类：
+> - **「加密」类型**（Secrets）由 Cloudflare 单独存储，`wrangler deploy` 从不会删除它们，只有手动删除才会消失；
+> - **「文本」类型**（Variables）靠 `wrangler.toml` 里的 `keep_vars = true` 保留——它告诉 Wrangler 不要用配置文件去覆盖控制台里已有的变量。
+>
+> 因此建议：密码、各类 token 一律选**加密**，其余展示类配置用**文本**即可。
+> 想在代码仓库里复现同一份配置时，可以把 TOML 片段贴进 `wrangler.toml` 的 `[vars]`，但那样就又变成「文件是唯一事实来源」了，本项目不采用这种写法。
 
 **关于 `PASSWORD`（安全设计）**
 
@@ -188,10 +214,55 @@
 
 ## 定时到期提醒（Cron Trigger）
 
-定时检查**完全由 Cloudflare 的 Cron Trigger 负责**，项目不提供任何环境变量来配置时间，也没有手动触发端点。
-请在 `Worker → 设置 → 触发器 → Cron 触发器` 添加表达式（如 `0 1,13 * * *`，UTC）。
+定时检查**完全由 Cloudflare 的 Cron Trigger 负责**：项目不提供任何环境变量来配置时间，没有手动触发端点，
+**也不在 `wrangler.toml` 里声明 `[triggers]`**。
+
+配置方法：`Worker → 设置 → 触发器 → Cron 触发器 → 添加`，填入表达式，例如
+
+```
+0 1,13 * * *
+```
+
+- 表达式按 **UTC** 计算，北京时间要减 8 小时；上面这条即北京时间 9:00 与 21:00。
+- 改时间只需改控制台，**不用改代码、不用重新部署**：程序在每次触发时会从事件自带的 `cron` 字段学习计划，
+  并据此判断该补跑哪一档。
+- 为什么不在文件里声明？按 Cloudflare 的规则，`triggers` / `crons` 为 `undefined` 时部署会**保留**控制台里已有的触发器；
+  而一旦在文件里写了 `crons`，每次部署就会用文件内容**覆盖**控制台配置。
+  所以把触发器放在控制台，才能做到「改时间不动代码」。（只有需要彻底清空全部触发器时，才要显式写 `crons = []`。）
+
 Cloudflare 不会自动重试失败的定时任务，因此每次 HTTP 请求时会顺带检查今天已到点但未被覆盖的计划槽位并补跑一次，
 详见 `src/schedule.js`。
+
+## 从 9f4d47e 及更早版本升级
+
+旧版本把 `PASSWORD` / `TGID` / `TGTOKEN` 放在 GitHub Actions 的 secrets 里、把 Cron 触发器写在 `wrangler.toml` 的 `[triggers]` 里；
+新版本把这两样都搬到 Cloudflare 控制台。**升级不需要迁移数据、不需要重建 KV、也不会中断服务。**
+
+升级步骤：
+
+1. 正常拉取/合并新代码（此时 `wrangler.toml` 已不再声明 `[triggers]`）；
+2. 触发一次部署。这一步不会造成任何配置丢失，原因见下表；
+3. 打开 `Worker → 设置 → 变量和机密`，把 `PASSWORD` / `TGID` / `TGTOKEN` 改成在控制台维护
+   （值可以直接沿用现有的，建议类型选「加密」）；
+4. 删除 GitHub 仓库里已不再使用的 `PASSWORD` / `TGID` / `TGTOKEN` secrets 和 `CF_CRONS` variable；
+5. 打开 `Worker → 设置 → 触发器 → Cron 触发器`，确认表达式与升级前一致（如 `0 1,13 * * *`）。
+
+升级前后对照：
+
+| 项目 | 9f4d47e | 现在 | 升级时会丢吗 |
+|------|---------|------|--------------|
+| KV 数据（域名列表、会话） | 绑定名 `DOMAIN_KV` | 同左，仍由 `CF_KV_ID` 注入 | ❌ 不会，绑定名与 key 格式都没变 |
+| Cron 触发器 | `wrangler.toml` 的 `[triggers]` | 控制台 | ❌ 不会，未声明 `triggers` 时部署**不触碰**已有触发器 |
+| `PASSWORD` / `TGID` / `TGTOKEN` | Actions secrets → `--var` | 控制台变量 | ❌ 不会，`keep_vars = true` 会保留已经部署上去的值 |
+| `CF_KV_ID` / `CF_API_TOKEN` / `CF_ACCOUNT_ID` | Actions 凭据 | 同左（三项仍在 Actions 里） | ❌ 不会 |
+| 手动触发端点 `/cron` | 有 | 已移除 | — 改为由控制台 Cron 触发，定时检查本身不受影响 |
+
+**升级后第一次部署是「零配置」的**：`keep_vars = true` 会把之前通过 `--var` 推上去的变量原样保留下来，
+所以登录和通知不会中断，你可以从容地在控制台里把它们的值改成「控制台维护」。
+
+唯一会消失的是 `/cron` 这个手动触发端点（探活用），它原本就不是定时检查的必要入口。
+
+如果部署日志里「检查 Worker 变量是否就绪」提示缺少 `PASSWORD`，说明控制台里还没配上，按第 3 步补上后重跑即可。
 
 ## 前端开发
 

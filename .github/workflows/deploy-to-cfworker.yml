@@ -8,17 +8,21 @@ on:
       - 'src/**'
       - 'frontend/**'
       - 'wrangler.toml'
+      - '.github/workflows/deploy-to-cfworker.yml'
   workflow_dispatch:
 
 jobs:
   auto-deploy:
     runs-on: ubuntu-latest
+
+    # 这里只保留「部署本身必需」的凭据。
+    # 业务配置（PASSWORD / TGID / TGTOKEN / SITENAME / DAYS / Turnstile 等）一律不在
+    # Actions 里出现，改在 Cloudflare 控制台的 Worker「变量和机密」中维护，见 README。
+    # 三项凭据放在 Secrets 或 Variables 里都认（优先读 Secrets）。
     env:
-      PASSWORD: ${{ secrets.PASSWORD }}
-      TGID: ${{ secrets.TGID}}
-      TGTOKEN: ${{ secrets.TGTOKEN}}
-      CF_KV_ID: ${{ secrets.CF_KV_ID }}
-      CF_CRONS: ${{ vars.CF_CRONS || '0 1,13 * * *' }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN || vars.CF_API_TOKEN }}
+      CF_KV_ID: ${{ secrets.CF_KV_ID || vars.CF_KV_ID }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || vars.CF_ACCOUNT_ID }}
 
     steps:
       - name: ⬇️ 检出仓库
@@ -35,9 +39,13 @@ jobs:
       - name: 🔄 替换 wrangler.toml 中的变量
         id: config_setup
         run: |
-          [ -n "${CF_KV_ID}" ] || { echo "🔴 错误: 必须设置 'CF_KV_ID' 变量"; exit 1; }  
+          [ -n "${CF_ACCOUNT_ID}" ] || { echo "🔴 错误: 必须设置 'CF_ACCOUNT_ID'（CF 账户 ID）"; exit 1; }
+          [ -n "${CF_API_TOKEN}" ] || { echo "🔴 错误: 必须设置 'CF_API_TOKEN'（需 Worker 与 KV 权限）"; exit 1; }
+          [ -n "${CF_KV_ID}" ] || { echo "🔴 错误: 必须设置 'CF_KV_ID'（KV 命名空间 ID）"; exit 1; }
+
+          # 只替换 KV 命名空间 ID；Cron 触发器不在 wrangler.toml 声明（由控制台管理），
+          # 环境变量也不通过这里注入（由控制台管理 + keep_vars 保留）。
           sed -i "s#{CF_KV_ID}#${CF_KV_ID}#g" wrangler.toml
-          sed -i "s#{CF_CRONS}#${CF_CRONS}#g" wrangler.toml
 
           WORKER_NAME=$(grep '^name =' wrangler.toml | awk -F '"' '{print $2}')
           [ -n "$WORKER_NAME" ] || { echo "🔴 错误: 未能在 wrangler.toml 中找到 'name' 字段"; exit 1; }
@@ -48,36 +56,100 @@ jobs:
           echo "-------------------"
           echo "worker_name=$WORKER_NAME" >> $GITHUB_OUTPUT
 
-      - name: ⚙️ 动态配置 Worker 环境变量
-        id: dynamic_vars
-        run: |
-          VARS=""
-          [ -n "$PASSWORD" ] && VARS+="PASSWORD"$'\n' || echo "⚠️ 警告: PASSWORD 变量未设置，默认为 123123"
-          [ -n "$TGID" ] && [ -n "$TGTOKEN" ] && VARS+="TGID"$'\n'"TGTOKEN"$'\n' || echo "⚠️ 警告: TG 变量未设置，无法执行 TG 通知"
-          printf 'vars_list<<EOF\n%sEOF\n' "$VARS" >>"$GITHUB_OUTPUT"
-
-          if [ -n "$VARS" ]; then
-            printf 'vars_list<<EOF\n%sEOF\n' "$VARS" >>"$GITHUB_OUTPUT"
-            echo -e "\n✅ 传递给 Wrangler 的环境变量名:"
-            printf '%s' "$VARS"
-          else
-            echo -e "\n⚠️ 没有需要传递的变量名"
-            printf 'vars_list=\n' >>"$GITHUB_OUTPUT"
-          fi
-
       - name: 🚀 部署到 CF Worker
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ vars.CF_ACCOUNT_ID }}
-          vars: ${{ steps.dynamic_vars.outputs.vars_list }}
+          apiToken: ${{ env.CF_API_TOKEN }}
+          accountId: ${{ env.CF_ACCOUNT_ID }}
+
+      # 部署本身不会碰控制台里的变量（加密变量不会被删除；文本变量靠 keep_vars 保留），
+      # 但「控制台里到底配没配」只有查一次才知道。这里部署后核对一遍，缺失就点名。
+      - name: 🔎 检查 Worker 变量是否就绪
+        env:
+          WORKER_NAME: ${{ steps.config_setup.outputs.worker_name }}
+        run: |
+          set -u
+          BASE="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}"
+
+          # settings 覆盖文本变量与各类绑定，secrets 覆盖加密变量，两边合并才是完整清单
+          NAMES=""
+          SETTINGS_OK=0
+          SECRETS_OK=0
+          for EP in settings secrets; do
+            code=$(curl -s -o "/tmp/cf-${EP}.json" -w '%{http_code}' \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" "${BASE}/${EP}") || code=000
+            if [ "$code" = "200" ]; then
+              if [ "$EP" = "settings" ]; then
+                NAMES="${NAMES}$(jq -r '.result.bindings[]?.name // empty' "/tmp/cf-${EP}.json")"$'\n'
+                SETTINGS_OK=1
+              else
+                NAMES="${NAMES}$(jq -r '.result[]?.name // empty' "/tmp/cf-${EP}.json")"$'\n'
+                SECRETS_OK=1
+              fi
+            else
+              echo "⚠️ 读取 ${EP} 失败（HTTP ${code}），跳过该来源"
+            fi
+          done
+
+          if [ "$SETTINGS_OK" = 0 ] && [ "$SECRETS_OK" = 0 ]; then
+            echo "⚠️ 无法读取 Worker 上的变量清单，跳过检查。"
+            echo "   请自行确认已在本 Worker 的「设置 → 变量和机密」中配置 PASSWORD。"
+            exit 0
+          fi
+
+          LIST=$(printf '%s' "${NAMES}" | sed '/^[[:space:]]*$/d')
+          has() { printf '%s\n' "${LIST}" | grep -qxF "$1"; }
+
+          echo "-------------------"
+          echo "当前 Worker 上的变量与绑定："
+          printf '%s\n' "${LIST}" | sort | sed 's/^/  - /'
+          echo "-------------------"
+
+          MISSING=0
+
+          if has PASSWORD; then
+            echo "✅ PASSWORD 已配置"
+          elif [ "$SETTINGS_OK" = 1 ] && [ "$SECRETS_OK" = 1 ]; then
+            echo "🔴 缺少必填变量 PASSWORD：/admin、/login 与受鉴权的 API 都会返回 503（fail-closed）。"
+            MISSING=1
+          else
+            echo "⚠️ 变量清单读取不完整，无法确认 PASSWORD 是否已配置，请到控制台自行核对。"
+          fi
+
+          if has TGID && has TGTOKEN; then
+            echo "✅ TGID / TGTOKEN 已配置，Telegram 通知可用"
+          elif has TGID || has TGTOKEN; then
+            echo "⚠️ TGID 与 TGTOKEN 只配了一个，Telegram 通知不会工作（必须成对配置）"
+          else
+            echo "ℹ️ 未配置 TGID / TGTOKEN，到期提醒不会发送（域名监控本身正常）"
+          fi
+
+          if has TURNSTILE_SITE_KEY && has TURNSTILE_SECRET_KEY; then
+            echo "✅ Turnstile 已启用，登录需先通过人机验证"
+          elif has TURNSTILE_SITE_KEY || has TURNSTILE_SECRET_KEY; then
+            echo "⚠️ TURNSTILE_SITE_KEY 与 TURNSTILE_SECRET_KEY 只配了一个，登录接口会返回 503（半配视为误配置）"
+          else
+            echo "ℹ️ 未配置 Turnstile，登录仅校验密码"
+          fi
+
+          echo
+          echo "🔔 定时检查由控制台的 Cron 触发器负责，本次部署不会修改它。"
+          echo "   查看或修改：Worker → 设置 → 触发器 → Cron 触发器"
+          echo "   示例表达式：0 1,13 * * *（UTC，即北京时间 9:00 与 21:00）"
+
+          if [ "$MISSING" = 1 ]; then
+            echo
+            echo "🔴 部署已完成，但必填变量缺失，管理功能当前不可用。"
+            echo "   配置入口：https://dash.cloudflare.com/${CF_ACCOUNT_ID}/workers/services/view/${WORKER_NAME}/production/settings"
+            echo "   添加 PASSWORD（建议类型选「加密」）后，重新运行本 workflow 即可。"
+            exit 1
+          fi
 
       - name: ✨ 输出 Worker 管理后台
         env:
           WORKER_NAME: ${{ steps.config_setup.outputs.worker_name }}
-          ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
         run: |
           echo -e "\n✨✨✨ 部署完成 ✨✨✨"
           echo "🌐 点击以下链接可访问项目管理后台"
-          echo "https://dash.cloudflare.com/${ACCOUNT_ID}/workers/services/view/${WORKER_NAME}/production/settings"
+          echo "https://dash.cloudflare.com/${CF_ACCOUNT_ID}/workers/services/view/${WORKER_NAME}/production/settings"
           echo "🚀 建议: 给项目绑定一个自定义域名"
