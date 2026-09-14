@@ -6,6 +6,48 @@
 https://your-domain-check.workers.dev
 ```
 
+> 鉴权说明：除 `/api/config` 与 `/api/whois/<域名>` 外，其余接口均需在 Cookie 中携带 `auth=<会话 token>`。
+> **`PASSWORD` 不会写入 Cookie**：调用 `POST /login` 登录后，由服务端下发一个随机会话 token，
+> 会话记录存放在 KV 的 `session:<token>`，默认空闲 7 天过期并自动删除（可用 `SESSION_TTL` 调整）。
+> 若 Worker 未配置 `PASSWORD` 环境变量，这些接口一律返回 `503`（fail-closed，不会跳过鉴权）。
+
+## POST /login —— 登录并获取会话 token
+
+- 请求示例（无需鉴权；把服务端下发的 Cookie 保存下来即可复用）
+
+```bash
+curl -i -X POST https://your-domain-check.workers.dev/login \
+     -d 'password=你的密码' \
+     -c cookies.txt
+```
+
+- 若启用了人机验证（同时配置 `TURNSTILE_SITE_KEY` 与 `TURNSTILE_SECRET_KEY`），必须额外提交
+  Turnstile 令牌，否则一律拒绝（连密码都不会比对）：
+
+```bash
+curl -i -X POST https://your-domain-check.workers.dev/login \
+     -d 'password=你的密码' \
+     -d 'cf-turnstile-response=客户端组件返回的令牌' \
+     -c cookies.txt
+```
+
+> 令牌只能使用一次且 5 分钟内有效，脚本化调用需每次重新获取。
+
+- 返回示例（密码正确时 302 跳转，并下发 HttpOnly 会话 Cookie）
+
+```
+HTTP/1.1 302 Found
+Location: /admin
+Set-Cookie: auth=<随机 token>; Max-Age=604800; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+- 登录失败时返回 `200` + 登录页（页面内显示具体原因：密码错误 / 人机验证未通过或已过期 /
+  人机验证服务暂时不可用），不会下发 Cookie、也不会建立会话记录
+- 若只配置了 `TURNSTILE_SITE_KEY` 与 `TURNSTILE_SECRET_KEY` 中的一个，返回 `503`（配置不完整）
+
+> 后续请求用 `-b cookies.txt` 携带该 Cookie。
+> 退出登录调用 `GET /logout`，会删除 KV 中的会话记录并清除 Cookie。
+
 ## GET /api/config —— 获取项目全局配置
 
 - 请求示例（无需鉴权）
@@ -28,34 +70,8 @@ curl -X GET https://your-domain-check.workers.dev/api/config
 }
 ```
 
-## GET 或 POST /cron —— 手动检查域名到期情况
-
-- 请求示例（无需鉴权）
-
-```
-curl -X GET https://your-domain-check.workers.dev/cron
-# 或
-curl -X POST https://your-domain-check.workers.dev/cron
-```
-
-- 返回示例
-
-```json
-{
-  "success": true,
-  "message": "已找到 2 个即将到期的域名，Telegram通知已尝试发送。",
-  "expiringCount": 2,
-  "domains": [
-    {
-      "domain": "example1.com",
-      "expirationDate": "2025-01-01",
-      "daysRemaining": 15,
-      // ... 其他域名信息
-    },
-    // ...
-  ]
-}
-```
+> 定时检查由 Cloudflare 的 Cron Trigger 触发，不提供手动触发端点；
+> 计划表达式在 `Worker → 设置 → 触发器 → Cron 触发器` 维护，详见 `src/schedule.js`。
 
 ## GET /api/domains —— 获取所有域名列表
 
@@ -63,7 +79,7 @@ curl -X POST https://your-domain-check.workers.dev/cron
 
 ```bash
 curl -X GET https://your-domain-check.workers/api/domains \
-     -H "Cookie: auth=<PASSWORD>"
+     -b cookies.txt
 ```
 
 - 返回示例
@@ -98,7 +114,7 @@ curl -X GET https://your-domain-check.workers/api/domains \
 ```bash
 curl -X POST https://your-domain-check.workers.dev/api/domains \
      -H "Content-Type: application/json" \
-     -H "Cookie: auth=<PASSWORD>" \
+     -b cookies.txt \
      -d '{
             "domain": "new-domain.com",
             "registrationDate": "2023-08-08",
@@ -126,7 +142,7 @@ curl -X POST https://your-domain-check.workers.dev/api/domains \
 ```bash
 curl -X PUT https://your-domain-check.workers.dev/api/domains \
      -H "Content-Type: application/json" \
-     -H "Cookie: auth=<PASSWORD>" \
+     -b cookies.txt \
      -d '[
             { "domain": "site-a.com", "expirationDate": "2025-10-01", "groups": "主要" },
             { "domain": "site-c-new.net", "expirationDate": "2026-08-08", "groups": "次要" }
@@ -150,7 +166,7 @@ curl -X PUT https://your-domain-check.workers.dev/api/domains \
 ```bash
 curl -X DELETE https://your-domain-check.workers.dev/api/domains \
      -H "Content-Type: application/json" \
-     -H "Cookie: auth=<PASSWORD>" \
+     -b cookies.txt \
      -d '{ "domain": "domain-to-delete.com" }'
 ```
 
@@ -168,7 +184,7 @@ curl -X DELETE https://your-domain-check.workers.dev/api/domains \
 ```bash
 curl -X DELETE https://your-domain-check.workers.dev/api/domains \
      -H "Content-Type: application/json" \
-     -H "Cookie: auth=<PASSWORD>" \
+     -b cookies.txt \
      -d '["domain-to-delete-1.com", "domain-to-delete-2.net", "domain-to-delete-3.io"]'
 ```
 

@@ -2,10 +2,21 @@
 //
 // 路由架构：
 //   /         → 公开页面（只读展示，服务端脱敏注入，无 API 调用）
-//   /admin    → 管理页面（需密码鉴权，可操作）
-//   /login    → 登录页（POST 成功后跳转 /admin）
-//   /logout   → 清除 Cookie，跳转回 /
+//   /admin    → 管理页面（需会话鉴权，可操作）
+//   /login    → 登录页（POST 成功后下发会话 Cookie 并跳转 /admin）
+//   /logout   → 注销当前会话（从 KV 删除记录）并跳转回 /
 //   /api/*    → 全部 API 均需鉴权（公开页不调用 API）
+//
+// 鉴权：必须显式配置 PASSWORD 环境变量（无默认值）。未配置时管理入口
+// （/admin、/login、受鉴权 API）一律返回 503 并提示去控制台配置，
+// 采用 fail-closed —— 绝不因为密码为空而跳过鉴权。公开首页 / 不受影响。
+//
+// 会话：登录成功后 Cookie 中只存放随机 token（不再是密码本身），会话记录存于
+// KV 的 `session:<token>`，空闲超过 SESSION_TTL（默认 7 天）即过期并从 KV 删除，
+// 详见 src/session.js。
+//
+// 防爆破：登录页可启用 Cloudflare Turnstile 人机验证。同时配置 TURNSTILE_SITE_KEY
+// 与 TURNSTILE_SECRET_KEY 即生效，登录前必须先通过服务端校验；详见 src/turnstile.js。
 //
 // 定时检查：由 Cloudflare 控制台的 Cron Trigger 触发（如 0 1,13 * * *，UTC），
 // 不提供环境变量配置时间，也不提供手动触发端点，详见 src/schedule.js。
@@ -16,7 +27,7 @@ import { onRequest as configApi } from './api/config';
 import { onRequest as domainsApi } from './api/domains';
 import { onRequest as whoisApi } from './api/whois';
 import { handleScheduledEvent, maybeRunCatchUpCheck } from './schedule';
-import { authenticate, handleLogin } from './auth';
+import { authenticate, handleLogin, handleLogout, passwordMissingResponse } from './auth';
 import { getDomainsFromKV } from './api/domains';
 
 /** 脱敏域名：只保留 TLD，其余用 ***** 替换 */
@@ -43,6 +54,21 @@ async function getMaskedDomains(env) {
     }));
 }
 
+/**
+ * 把会话滑动续期的 Set-Cookie 附加到响应上（未续期时原样返回）。
+ * 让浏览器端的 Cookie 有效期跟随服务端会话一起滑动。
+ */
+function withSessionCookie(response, cookie) {
+    if (!cookie) return response;
+    const headers = new Headers(response.headers);
+    headers.append('Set-Cookie', cookie);
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+    });
+}
+
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -61,14 +87,17 @@ export default {
         
         // 登录页
         if (pathname === '/login') {
+            // PASSWORD 未配置：登录入口不可用（handleLogin 内部同样有守卫，此处显式挡一层）
+            if (!config.password) return passwordMissingResponse(config);
             return handleLogin(request, env, '/admin');
         }
 
-        // 退出登录：清除登录 Cookie，跳转回首页
+        // 退出登录：删除 KV 中的会话记录并清除 Cookie，跳转回首页
         if (pathname === '/logout') {
+            const clearedCookie = await handleLogout(env, request);
             const headers = new Headers();
             headers.set('Location', '/');
-            headers.set('Set-Cookie', 'auth=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Path=/; Secure; SameSite=Lax');
+            headers.set('Set-Cookie', clearedCookie);
             return new Response(null, { status: 302, headers });
         }
 
@@ -87,13 +116,15 @@ export default {
 
         // ----- API 路由（全部需鉴权） -----
         if (pathname.startsWith('/api/')) {
-            if (config.password) {
-                const authResponse = await authenticate(request, env);
-                if (authResponse) return authResponse;
-            }
+            // PASSWORD 未配置：受鉴权 API 一律拒绝（fail-closed，绝不跳过鉴权）
+            if (!config.password) return passwordMissingResponse(config, true);
+            const auth = await authenticate(request, env);
+            if (!auth.ok) return auth.response;
             const context = { request, env, ctx, next: () => {} };
-            if (pathname === '/api/domains') { return domainsApi(context); }
-            return new Response('API Not Found', { status: 404 });
+            const response = pathname === '/api/domains'
+                ? await domainsApi(context)
+                : new Response('API Not Found', { status: 404 });
+            return withSessionCookie(response, auth.cookie);
         }
 
         // ----- 公开首页：服务端脱敏注入，无需 API 调用 -----
@@ -114,11 +145,11 @@ export default {
 
         // ----- 管理页面（需鉴权） -----
         if (pathname === '/admin') {
-            if (config.password) {
-                const authResponse = await authenticate(request, env);
-                if (authResponse) return authResponse;
-            }
-            return new Response(HTML_TEMPLATE(
+            // PASSWORD 未配置：管理页不可访问（fail-closed，绝不跳过鉴权）
+            if (!config.password) return passwordMissingResponse(config);
+            const auth = await authenticate(request, env);
+            if (!auth.ok) return auth.response;
+            return withSessionCookie(new Response(HTML_TEMPLATE(
                 config.siteName, config.siteIcon, config.bgimgURL,
                 config.githubURL, config.blogURL, config.blogName,
                 true // isAdmin = true
@@ -127,7 +158,7 @@ export default {
                     'Content-Type': 'text/html;charset=UTF-8',
                     'Cache-Control': 'no-cache, no-store, must-revalidate'
                 }
-            });
+            }), auth.cookie);
         }
 
         return new Response('Not Found', { status: 404 });
