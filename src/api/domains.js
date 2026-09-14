@@ -5,6 +5,20 @@ import { fetchDomainFromAPI } from './whois';
 
 const DOMAIN_KEY_PREFIX = 'domain:';
 
+/**
+ * 获取 KV 绑定。
+ *
+ * 绑定名优先取控制台手动配置的 kv；同时兼容本项目 wrangler.toml 里声明的
+ * DOMAIN_KV，两种绑定名都能识别。
+ */
+export function getKV(env) {
+    const kv = env.kv || env.DOMAIN_KV;
+    if (!kv) {
+        throw new Error('未找到 KV 绑定。请为本 Worker 添加 KV 命名空间绑定，变量名（Binding name）为 kv 或 DOMAIN_KV');
+    }
+    return kv;
+}
+
 // 从 KV 中列出所有域名 key（分页安全）
 async function getAllDomainKeys(env) {
     const keys = [];

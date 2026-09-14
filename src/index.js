@@ -6,14 +6,16 @@
 //   /login    → 登录页（POST 成功后跳转 /admin）
 //   /logout   → 清除 Cookie，跳转回 /
 //   /api/*    → 全部 API 均需鉴权（公开页不调用 API）
-//   /cron     → 手动触发定时检查（公开）
+//
+// 定时检查：由 Cloudflare 控制台的 Cron Trigger 触发（如 0 1,13 * * *，UTC），
+// 不提供环境变量配置时间，也不提供手动触发端点，详见 src/schedule.js。
 
 import { getConfig } from './utils';
 import { HTML_TEMPLATE } from '../frontend/index';
 import { onRequest as configApi } from './api/config';
 import { onRequest as domainsApi } from './api/domains';
 import { onRequest as whoisApi } from './api/whois';
-import { checkDomainsScheduled } from './cron';
+import { handleScheduledEvent, maybeRunCatchUpCheck } from './schedule';
 import { authenticate, handleLogin } from './auth';
 import { getDomainsFromKV } from './api/domains';
 
@@ -46,6 +48,14 @@ export default {
         const url = new URL(request.url);
         const pathname = url.pathname;
         const config = getConfig(env);
+
+        // 定时检查补跑：正常由 Cloudflare Cron Trigger 触发，这里只在今天的计划
+        // 槽位尚未被覆盖时（定时任务延迟或失败）补跑一次。后台执行，不阻塞本次请求。
+        if (ctx && typeof ctx.waitUntil === 'function') {
+            ctx.waitUntil(maybeRunCatchUpCheck(env).catch(err => {
+                console.error('定时检查补跑异常:', err);
+            }));
+        }
         
         // ----- 公开端点（无需鉴权） -----
         
@@ -73,34 +83,6 @@ export default {
             const context = { request, env, ctx, next: () => {} };
             const domain = pathname.replace('/api/whois/', '');
             return whoisApi(context, domain);
-        }
-
-        // 手动触发定时检查
-        if (pathname === '/cron') {
-            if (request.method !== 'GET' && request.method !== 'POST') {
-                return new Response('Method Not Allowed', { status: 405 });
-            }
-            try {
-                const expiringDomains = await checkDomainsScheduled(env); 
-                const responseBody = {
-                    success: true,
-                    message: expiringDomains.length > 0 
-                             ? `${expiringDomains.length} 个域名即将到期`
-                             : "没有即将到期的域名",
-                    expiringCount: expiringDomains.length,
-                    domains: expiringDomains
-                };
-                return new Response(JSON.stringify(responseBody), {
-                    headers: { 'Content-Type': 'application/json' },
-                });
-            } catch (error) {
-                console.error("手动触发 cron 失败:", error);
-                return new Response(JSON.stringify({
-                    success: false,
-                    error: "cron 任务执行失败",
-                    details: error.message
-                }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-            }
         }
 
         // ----- API 路由（全部需鉴权） -----
@@ -151,9 +133,11 @@ export default {
         return new Response('Not Found', { status: 404 });
     },
 
-    // Cron Triggers 定时任务处理器
+    // Cloudflare Cron Trigger 处理器。
+    // 在控制台「Worker → 设置 → 触发器 → Cron 触发器」添加表达式（如 0 1,13 * * *，UTC）
+    // 后由此触发；执行标记、幂等与失败回滚见 src/schedule.js。
     async scheduled(event, env, ctx) {
-        ctx.waitUntil(checkDomainsScheduled(env).catch(err => {
+        ctx.waitUntil(handleScheduledEvent(env, event).catch(err => {
             console.error('定时任务执行失败:', err);
         }));
     }
