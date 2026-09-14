@@ -2,5 +2,10 @@ node_modules/
 wrangler.local.toml
 .wrangler/
 .env.local
+.dev.vars
+.dev.vars.*
 .hermes/
 .playwright-mcp/
+
+# 本地 AI 助手的工作区数据（项目记忆/开发日志等），不纳入版本控制
+.workbuddy/
