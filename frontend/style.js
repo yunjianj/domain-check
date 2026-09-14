@@ -61,6 +61,9 @@ export const HTML_CSS = `
 .select-btn:hover { background-color: #7d3c9a; }
 .del-btn { background-color: var(--danger); color: white; }
 .del-btn:hover { background-color: var(--danger-hover); }
+.notify-btn { background-color: #229ed9; color: white; }
+.notify-btn:hover:not(:disabled) { background-color: #1c86b8; }
+.notify-btn:disabled { opacity: 0.7; cursor: not-allowed; }
 
 /* 概览卡片样式 */
 .summary-container {

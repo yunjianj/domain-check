@@ -235,3 +235,40 @@ curl -X GET https://your-domain-check.workers/api/whois/<要查询的域名>
   }
 }
 ```
+
+## POST /api/notify-test —— 发送 Telegram 测试消息
+
+- 用途：验证 `TGID` / `TGTOKEN` 配置是否真的能送达，不必等到期提醒触发。
+- 请求示例（需鉴权）
+
+```bash
+curl -i -X POST https://your-domain-check.workers.dev/api/notify-test \
+     -b cookies.txt
+```
+
+- 走的是与定时任务完全相同的推送函数（`parse_mode=HTML`）；管理页右上角「测试通知」按钮即调用本接口。
+- 未同时配置 `TGID` 与 `TGTOKEN` 时返回 `400`，并在 `error` 中点名缺失的变量（不会静默跳过）。
+
+Success
+
+```json
+{ "success": true, "message": "测试消息已发送，请查看 Telegram" }
+```
+
+未配置通知目标（400）
+
+```json
+{
+  "success": false,
+  "error": "未配置 TGID 与 TGTOKEN，请在 Cloudflare 控制台为本 Worker 添加后重试"
+}
+```
+
+Telegram 拒绝发送（502，`error` 内为 Telegram 返回的原因）
+
+```json
+{ "success": false, "error": "发送失败：Unauthorized" }
+```
+
+- 其它状态码：`405`（非 POST 请求）。
+- 常见失败原因：token 填错（`Unauthorized`）、chat id 填错或机器人未被拉进会话（`Bad Request: chat not found`）、机器人被用户拉黑（`Forbidden: bot was blocked by the user`）。

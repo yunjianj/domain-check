@@ -96,6 +96,34 @@ function importData() {
     };
 }
 
+// 发送 Telegram 测试消息: POST /api/notify-test
+// 用于在管理页直接验证 TG 通知配置是否生效，无需等到期提醒触发。
+async function sendTestNotify(btn) {
+    const originalHTML = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 发送中';
+    }
+
+    try {
+        const response = await fetch(NOTIFY_TEST_API, { method: 'POST' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || response.statusText || '发送失败');
+        }
+        showSuccess(data.message || '测试消息已发送，请查看 Telegram');
+    } catch (error) {
+        console.error('发送测试消息失败:', error);
+        showError('发送测试消息失败: ' + error.message);
+    } finally {
+        // 不等待弹窗关闭，立即恢复按钮可点状态
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalHTML;
+        }
+    }
+}
+
 // 续费域名: PATCH /api/domains
 async function renewDomain(domain, duration, unit) {
     try {

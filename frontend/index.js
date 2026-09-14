@@ -53,6 +53,7 @@ function generateAdminHeader(siteName) {
             <button id="exportDataBtn" class="action-btn export-btn"><i class="fas fa-download"></i> 导出</button>
             <button id="importDataBtn" class="action-btn import-btn"><i class="fas fa-upload"></i> 导入</button>
             <input type="file" id="importFileInput" accept=".json" style="display: none;">
+            <button id="testNotifyBtn" class="action-btn notify-btn"><i class="fab fa-telegram"></i> 测试通知</button>
             <button id="logoutBtn" class="action-btn logout-btn"><i class="fas fa-sign-out-alt"></i> 退出</button>
         </div>
     </div>`;

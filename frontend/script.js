@@ -3,6 +3,7 @@ export const HTML_JS = `
 
 const DOMAINS_API = '/api/domains';
 const CONFIG_API = '/api/config';
+const NOTIFY_TEST_API = '/api/notify-test'; // 发送 TG 测试消息
 const ITEMS_PER_PAGE = 12; // 每页12个域名信息卡
 let allDomains = []; // 存储所有域名数据
 let currentFilteredDomains = []; // 存储当前过滤和搜索后的数据
@@ -284,6 +285,34 @@ function importData() {
             fileInput.value = '';
         }
     };
+}
+
+// 发送 Telegram 测试消息: POST /api/notify-test
+// 用于在管理页直接验证 TG 通知配置是否生效，无需等到期提醒触发。
+async function sendTestNotify(btn) {
+    const originalHTML = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 发送中';
+    }
+
+    try {
+        const response = await fetch(NOTIFY_TEST_API, { method: 'POST' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || response.statusText || '发送失败');
+        }
+        showSuccess(data.message || '测试消息已发送，请查看 Telegram');
+    } catch (error) {
+        console.error('发送测试消息失败:', error);
+        showError('发送测试消息失败: ' + error.message);
+    } finally {
+        // 不等待弹窗关闭，立即恢复按钮可点状态
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalHTML;
+        }
+    }
 }
 
 // 续费域名: PATCH /api/domains
@@ -1189,6 +1218,9 @@ window.addEventListener('load', async () => {
         document.getElementById('addDomainBtn').addEventListener('click', () => openDomainForm());
         document.getElementById('exportDataBtn').addEventListener('click', exportData);
         document.getElementById('importDataBtn').addEventListener('click', importData);
+
+        // 发送 Telegram 测试消息，验证通知配置
+        document.getElementById('testNotifyBtn').addEventListener('click', (e) => sendTestNotify(e.currentTarget));
 
         // 全选按钮：勾选/取消当前页面所有可见卡片
         document.getElementById('selectAllBtn').addEventListener('click', () => {

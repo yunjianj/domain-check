@@ -10,6 +10,9 @@ window.addEventListener('load', async () => {
         document.getElementById('exportDataBtn').addEventListener('click', exportData);
         document.getElementById('importDataBtn').addEventListener('click', importData);
 
+        // 发送 Telegram 测试消息，验证通知配置
+        document.getElementById('testNotifyBtn').addEventListener('click', (e) => sendTestNotify(e.currentTarget));
+
         // 全选按钮：勾选/取消当前页面所有可见卡片
         document.getElementById('selectAllBtn').addEventListener('click', () => {
             const checkboxes = document.querySelectorAll('#domainList .card-checkbox');

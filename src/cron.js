@@ -49,8 +49,12 @@ export async function checkDomainsScheduled(env) {
 👤 注册账号: <code>${domainInfo.registerAccount || 'N/A'}</code>
 --------------------------`;
 
-            await sendtgMessage(message, config.tgid, config.tgtoken);
-            console.log(`已发送 ${domainInfo.domain} 的到期通知.`);
+            const result = await sendtgMessage(message, config.tgid, config.tgtoken);
+            if (result.ok) {
+                console.log(`已发送 ${domainInfo.domain} 的到期通知.`);
+            } else {
+                console.error(`发送 ${domainInfo.domain} 的到期通知失败: ${result.description}`);
+            }
             expiringDomains.push({
                 domain: domainInfo.domain,
                 expirationDate: domainInfo.expirationDate,

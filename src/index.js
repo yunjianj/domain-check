@@ -25,6 +25,7 @@ import { getConfig } from './utils';
 import { HTML_TEMPLATE } from '../frontend/index';
 import { onRequest as configApi } from './api/config';
 import { onRequest as domainsApi } from './api/domains';
+import { onRequest as notifyApi } from './api/notify';
 import { onRequest as whoisApi } from './api/whois';
 import { handleScheduledEvent, maybeRunCatchUpCheck } from './schedule';
 import { authenticate, handleLogin, handleLogout, passwordMissingResponse } from './auth';
@@ -121,9 +122,15 @@ export default {
             const auth = await authenticate(request, env);
             if (!auth.ok) return auth.response;
             const context = { request, env, ctx, next: () => {} };
-            const response = pathname === '/api/domains'
-                ? await domainsApi(context)
-                : new Response('API Not Found', { status: 404 });
+            let response;
+            if (pathname === '/api/domains') {
+                response = await domainsApi(context);
+            } else if (pathname === '/api/notify-test') {
+                // 发送一条 Telegram 测试消息，用于在管理页验证通知是否生效
+                response = await notifyApi(context);
+            } else {
+                response = new Response('API Not Found', { status: 404 });
+            }
             return withSessionCookie(response, auth.cookie);
         }
 

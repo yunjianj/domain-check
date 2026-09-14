@@ -45,21 +45,41 @@ export function isPrimaryDomain(domain) {
 }
 
 // TG通知函数
+//
+// 返回发送结果，让调用方能区分「确实送达」和「静默失败」：
+//   { ok: true,  description: 'ok' }   发送成功
+//   { ok: false, description: '...' }  未配置 / Telegram 报错 / 网络异常
+// 定时任务用它写日志，测试通知接口用它把失败原因透出给前端。
 export async function sendtgMessage(message, tgid, tgtoken) {
-    if (!tgid || !tgtoken) return;
+    if (!tgid || !tgtoken) {
+        return { ok: false, description: '未配置 TGID / TGTOKEN' };
+    }
+
     const url = `https://api.telegram.org/bot${tgtoken}/sendMessage`;
     const params = {
         chat_id: tgid,
         text: message,
         parse_mode: "HTML"
     };
+
     try {
-        await fetch(url, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params),
         });
+
+        // Telegram 部分错误会返回 HTTP 200 但 body 里 ok=false，两个条件都要判断
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || data.ok !== true) {
+            const description = (data && data.description) || `HTTP ${response.status}`;
+            console.error('Telegram 消息推送失败:', description);
+            return { ok: false, description };
+        }
+
+        return { ok: true, description: 'ok' };
     } catch (error) {
         console.error('Telegram 消息推送失败:', error);
+        return { ok: false, description: error.message || '请求 Telegram API 失败' };
     }
 }
