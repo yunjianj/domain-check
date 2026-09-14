@@ -206,6 +206,10 @@ curl -X DELETE https://your-domain-check.workers.dev/api/domains \
 curl -X GET https://your-domain-check.workers/api/whois/<要查询的域名>
 ```
 
+- 查询链路：先解析 ip.sb 的页面（内嵌 RDAP JSON → 渲染字段行 → 旧版原始 WHOIS 文本，按优先级合并）；若拿不到到期日，则改用该 TLD 注册局的 RDAP 直连查询（地址取自 IANA 官方 bootstrap，未收录时退回页面给出的 Registry RDAP 地址）。
+- 日期字段统一为 `YYYY-MM-DD`。
+- 注意：部分注册局（如 `.de`）出于隐私政策不公开注册/到期日期，此类域名会返回 404。
+
 - 返回示例
 
 ```json
@@ -213,9 +217,9 @@ curl -X GET https://your-domain-check.workers/api/whois/<要查询的域名>
   "success": true,
   "data": {
     "domain": "github.com",
-    "creationDate": "2007-10-09T18:20:50Z",
-    "updatedDate": "2024-09-07T09:16:32Z",
-    "expiryDate": "2026-10-09T18:20:50Z",
+    "creationDate": "2007-10-09",
+    "updatedDate": "2024-09-07",
+    "expiryDate": "2026-10-09",
     "registrar": "MarkMonitor",
     "registrarUrl": "http://www.markmonitor.com",
     "nameServers": [
